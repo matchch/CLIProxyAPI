@@ -1,6 +1,8 @@
 package executor
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"sync"
 	"time"
 )
@@ -35,38 +37,53 @@ func purgeExpiredUserIDs() {
 	now := time.Now()
 	userIDCacheMu.Lock()
 	for key, entry := range userIDCache {
-		if entry.expire.Before(now) {
+		if !entry.expire.After(now) {
 			delete(userIDCache, key)
 		}
 	}
 	userIDCacheMu.Unlock()
 }
 
-func cachedUserID(provider, model string) string {
-	if provider == "" || model == "" {
+func userIDCacheKey(apiKey string) string {
+	sum := sha256.Sum256([]byte(apiKey))
+	return hex.EncodeToString(sum[:])
+}
+
+func cachedUserID(apiKey string) string {
+	if apiKey == "" {
 		return generateFakeUserID()
 	}
 
 	userIDCacheCleanupOnce.Do(startUserIDCacheCleanup)
 
-	key := provider + "|" + model
+	key := userIDCacheKey(apiKey)
 	now := time.Now()
 
 	userIDCacheMu.RLock()
 	entry, ok := userIDCache[key]
+	valid := ok && entry.value != "" && entry.expire.After(now) && isValidUserID(entry.value)
 	userIDCacheMu.RUnlock()
-	if ok && entry.expire.After(now) && entry.value != "" && isValidUserID(entry.value) {
-		return entry.value
+	if valid {
+		userIDCacheMu.Lock()
+		entry = userIDCache[key]
+		if entry.value != "" && entry.expire.After(now) && isValidUserID(entry.value) {
+			entry.expire = now.Add(userIDTTL)
+			userIDCache[key] = entry
+			userIDCacheMu.Unlock()
+			return entry.value
+		}
+		userIDCacheMu.Unlock()
 	}
 
 	newID := generateFakeUserID()
+
 	userIDCacheMu.Lock()
 	entry, ok = userIDCache[key]
-	if ok && entry.expire.After(now) && entry.value != "" && isValidUserID(entry.value) {
-		userIDCacheMu.Unlock()
-		return entry.value
+	if !ok || entry.value == "" || !entry.expire.After(now) || !isValidUserID(entry.value) {
+		entry.value = newID
 	}
-	userIDCache[key] = userIDCacheEntry{value: newID, expire: now.Add(userIDTTL)}
+	entry.expire = now.Add(userIDTTL)
+	userIDCache[key] = entry
 	userIDCacheMu.Unlock()
-	return newID
+	return entry.value
 }
