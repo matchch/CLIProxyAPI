@@ -36,10 +36,12 @@ jobs:
         env:
           BRANCH_NAME: ${{ env.TARGET_BRANCH }}
         run: |
+          set -e
           branch="${BRANCH_NAME:-${GITHUB_REF_NAME:-main}}"
           git checkout "$branch"
           git merge --ff-only "upstream/${branch}"
           git push origin "$branch"
 
       - name: Push tags
+        if: success()
         run: git push origin --tags

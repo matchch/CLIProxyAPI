@@ -61,6 +61,11 @@ func cachedUserID(provider, model string) string {
 
 	newID := generateFakeUserID()
 	userIDCacheMu.Lock()
+	entry, ok = userIDCache[key]
+	if ok && entry.expire.After(now) && entry.value != "" && isValidUserID(entry.value) {
+		userIDCacheMu.Unlock()
+		return entry.value
+	}
 	userIDCache[key] = userIDCacheEntry{value: newID, expire: now.Add(userIDTTL)}
 	userIDCacheMu.Unlock()
 	return newID
