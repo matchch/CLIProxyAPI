@@ -1,0 +1,47 @@
+name: upstream-sync
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_REPO: router-for-me/CLIProxyAPI
+  TARGET_BRANCH: ${{ github.event.repository.default_branch }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
+
+      - name: Fetch upstream
+        run: git fetch upstream --tags
+
+      - name: Sync default branch
+        env:
+          BRANCH_NAME: ${{ env.TARGET_BRANCH }}
+        run: |
+          set -e
+          branch="${BRANCH_NAME:-${GITHUB_REF_NAME:-main}}"
+          git checkout "$branch"
+          git merge --ff-only "upstream/${branch}"
+          git push origin "$branch"
+
+      - name: Push tags
+        if: success()
+        run: git push origin --tags
