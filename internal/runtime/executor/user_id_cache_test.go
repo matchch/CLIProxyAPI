@@ -29,8 +29,9 @@ func TestCachedUserID_ExpiresAfterTTL(t *testing.T) {
 	resetUserIDCache()
 
 	expiredID := cachedUserID("api-key-expired")
+	cacheKey := userIDCacheKey("api-key-expired")
 	userIDCacheMu.Lock()
-	userIDCache["api-key-expired"] = userIDCacheEntry{
+	userIDCache[cacheKey] = userIDCacheEntry{
 		value:  expiredID,
 		expire: time.Now().Add(-time.Minute),
 	}
@@ -61,10 +62,11 @@ func TestCachedUserID_RenewsTTLOnHit(t *testing.T) {
 
 	key := "api-key-renew"
 	id := cachedUserID(key)
+	cacheKey := userIDCacheKey(key)
 
 	soon := time.Now()
 	userIDCacheMu.Lock()
-	userIDCache[key] = userIDCacheEntry{
+	userIDCache[cacheKey] = userIDCacheEntry{
 		value:  id,
 		expire: soon.Add(2 * time.Second),
 	}
@@ -75,7 +77,7 @@ func TestCachedUserID_RenewsTTLOnHit(t *testing.T) {
 	}
 
 	userIDCacheMu.RLock()
-	entry := userIDCache[key]
+	entry := userIDCache[cacheKey]
 	userIDCacheMu.RUnlock()
 
 	if entry.expire.Sub(soon) < 30*time.Minute {
