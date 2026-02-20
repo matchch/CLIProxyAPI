@@ -42,31 +42,22 @@ func purgeExpiredUserIDs() {
 	userIDCacheMu.Unlock()
 }
 
-func cachedUserID(provider, model string) string {
-	if provider == "" || model == "" {
+func cachedUserID(apiKey string) string {
+	if apiKey == "" {
 		return generateFakeUserID()
 	}
 
 	userIDCacheCleanupOnce.Do(startUserIDCacheCleanup)
 
-	key := provider + "|" + model
 	now := time.Now()
 
-	userIDCacheMu.RLock()
-	entry, ok := userIDCache[key]
-	userIDCacheMu.RUnlock()
-	if ok && entry.expire.After(now) && entry.value != "" && isValidUserID(entry.value) {
-		return entry.value
-	}
-
-	newID := generateFakeUserID()
 	userIDCacheMu.Lock()
-	entry, ok = userIDCache[key]
-	if ok && entry.expire.After(now) && entry.value != "" && isValidUserID(entry.value) {
-		userIDCacheMu.Unlock()
-		return entry.value
+	entry := userIDCache[apiKey]
+	if entry.value == "" || entry.expire.Before(now) || !isValidUserID(entry.value) {
+		entry.value = generateFakeUserID()
 	}
-	userIDCache[key] = userIDCacheEntry{value: newID, expire: now.Add(userIDTTL)}
+	entry.expire = now.Add(userIDTTL)
+	userIDCache[apiKey] = entry
 	userIDCacheMu.Unlock()
-	return newID
+	return entry.value
 }
