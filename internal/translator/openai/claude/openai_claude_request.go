@@ -436,16 +436,12 @@ func convertClaudeToolResultContent(content gjson.Result) (string, bool) {
 		return partsJSON, true
 	}
 
-	return convertClaudeToolResultContentToString(content), false
-}
-
-func convertClaudeToolResultContentToString(content gjson.Result) string {
 	if !content.Exists() {
-		return ""
+		return "", false
 	}
 
 	if content.Type == gjson.String {
-		return content.String()
+		return content.String(), false
 	}
 
 	if content.IsArray() {
@@ -464,17 +460,17 @@ func convertClaudeToolResultContentToString(content gjson.Result) string {
 
 		joined := strings.Join(parts, "\n\n")
 		if strings.TrimSpace(joined) != "" {
-			return joined
+			return joined, false
 		}
-		return content.Raw
+		return content.Raw, false
 	}
 
 	if content.IsObject() {
 		if text := content.Get("text"); text.Exists() && text.Type == gjson.String {
-			return text.String()
+			return text.String(), false
 		}
-		return content.Raw
+		return content.Raw, false
 	}
 
-	return content.Raw
+	return content.Raw, false
 }

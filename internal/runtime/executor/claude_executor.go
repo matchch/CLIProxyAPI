@@ -983,9 +983,9 @@ func getClientUserAgent(ctx context.Context) string {
 
 // getCloakConfigFromAuth extracts cloak configuration from auth attributes.
 // Returns (cloakMode, strictMode, sensitiveWords, cacheUserID).
-func getCloakConfigFromAuth(auth *cliproxyauth.Auth) (string, bool, []string, *bool) {
+func getCloakConfigFromAuth(auth *cliproxyauth.Auth) (string, bool, []string, bool) {
 	if auth == nil || auth.Attributes == nil {
-		return "auto", false, nil, nil
+		return "auto", false, nil, false
 	}
 
 	cloakMode := auth.Attributes["cloak_mode"]
@@ -1003,11 +1003,7 @@ func getCloakConfigFromAuth(auth *cliproxyauth.Auth) (string, bool, []string, *b
 		}
 	}
 
-	var cacheUserID *bool
-	if cache := strings.TrimSpace(auth.Attributes["cloak_cache_user_id"]); cache != "" {
-		enabled := strings.EqualFold(cache, "true")
-		cacheUserID = &enabled
-	}
+	cacheUserID := strings.EqualFold(strings.TrimSpace(auth.Attributes["cloak_cache_user_id"]), "true")
 
 	return cloakMode, strictMode, sensitiveWords, cacheUserID
 }
@@ -1106,13 +1102,15 @@ func applyCloaking(ctx context.Context, cfg *config.Config, auth *cliproxyauth.A
 	var cloakMode string
 	var strictMode bool
 	var sensitiveWords []string
-	var cacheUserID *bool
+	var cacheUserID bool
 
 	if cloakCfg != nil {
 		cloakMode = cloakCfg.Mode
 		strictMode = cloakCfg.StrictMode
 		sensitiveWords = cloakCfg.SensitiveWords
-		cacheUserID = cloakCfg.CacheUserID
+		if cloakCfg.CacheUserID != nil {
+			cacheUserID = *cloakCfg.CacheUserID
+		}
 	}
 
 	// Fallback to auth attributes if no config found
@@ -1125,10 +1123,10 @@ func applyCloaking(ctx context.Context, cfg *config.Config, auth *cliproxyauth.A
 		if len(sensitiveWords) == 0 {
 			sensitiveWords = attrWords
 		}
-		if cacheUserID == nil {
+		if cloakCfg == nil || cloakCfg.CacheUserID == nil {
 			cacheUserID = attrCache
 		}
-	} else if cacheUserID == nil {
+	} else if cloakCfg == nil || cloakCfg.CacheUserID == nil {
 		_, _, _, attrCache := getCloakConfigFromAuth(auth)
 		cacheUserID = attrCache
 	}
@@ -1144,11 +1142,7 @@ func applyCloaking(ctx context.Context, cfg *config.Config, auth *cliproxyauth.A
 	}
 
 	// Inject fake user ID
-	useUserIDCache := false
-	if cacheUserID != nil {
-		useUserIDCache = *cacheUserID
-	}
-	payload = injectFakeUserID(payload, apiKey, useUserIDCache)
+	payload = injectFakeUserID(payload, apiKey, cacheUserID)
 
 	// Apply sensitive word obfuscation
 	if len(sensitiveWords) > 0 {
