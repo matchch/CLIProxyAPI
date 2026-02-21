@@ -208,7 +208,7 @@ func TestApplyClaudeToolPrefix_NestedToolReference(t *testing.T) {
 	}
 }
 
-func TestClaudeExecutor_ReusesUserIDAcrossModels(t *testing.T) {
+func TestClaudeExecutor_ReusesUserIDAcrossModelsWhenCacheEnabled(t *testing.T) {
 	resetUserIDCache()
 
 	var userIDs []string
@@ -227,7 +227,18 @@ func TestClaudeExecutor_ReusesUserIDAcrossModels(t *testing.T) {
 
 	t.Logf("End-to-end test: Fake HTTP server started at %s", server.URL)
 
-	executor := NewClaudeExecutor(&config.Config{})
+	cacheEnabled := true
+	executor := NewClaudeExecutor(&config.Config{
+		ClaudeKey: []config.ClaudeKey{
+			{
+				APIKey:  "key-123",
+				BaseURL: server.URL,
+				Cloak: &config.CloakConfig{
+					CacheUserID: &cacheEnabled,
+				},
+			},
+		},
+	})
 	auth := &cliproxyauth.Auth{Attributes: map[string]string{
 		"api_key":  "key-123",
 		"base_url": server.URL,
@@ -263,6 +274,51 @@ func TestClaudeExecutor_ReusesUserIDAcrossModels(t *testing.T) {
 		t.Fatalf("user_id %q is not valid", userIDs[0])
 	}
 	t.Logf("✓ End-to-end test passed: Same user_id (%s) was used for both models", userIDs[0])
+}
+
+func TestClaudeExecutor_GeneratesNewUserIDByDefault(t *testing.T) {
+	resetUserIDCache()
+
+	var userIDs []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		userIDs = append(userIDs, gjson.GetBytes(body, "metadata.user_id").String())
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","model":"claude-3-5-sonnet","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	executor := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  "key-123",
+		"base_url": server.URL,
+	}}
+
+	payload := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+
+	for i := 0; i < 2; i++ {
+		if _, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
+			Model:   "claude-3-5-sonnet",
+			Payload: payload,
+		}, cliproxyexecutor.Options{
+			SourceFormat: sdktranslator.FromString("claude"),
+		}); err != nil {
+			t.Fatalf("Execute call %d error: %v", i, err)
+		}
+	}
+
+	if len(userIDs) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(userIDs))
+	}
+	if userIDs[0] == "" || userIDs[1] == "" {
+		t.Fatal("expected user_id to be populated")
+	}
+	if userIDs[0] == userIDs[1] {
+		t.Fatalf("expected user_id to change when caching is not enabled, got identical values %q", userIDs[0])
+	}
+	if !isValidUserID(userIDs[0]) || !isValidUserID(userIDs[1]) {
+		t.Fatalf("user_ids should be valid, got %q and %q", userIDs[0], userIDs[1])
+	}
 }
 
 func TestStripClaudeToolPrefixFromResponse_NestedToolReference(t *testing.T) {
