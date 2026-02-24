@@ -64,6 +64,7 @@ const (
 	refreshFailureBackoff = 5 * time.Minute
 	quotaBackoffBase      = time.Second
 	quotaBackoffMax       = 30 * time.Minute
+	maxConcurrentRefresh  = 4
 )
 
 var quotaCooldownDisabled atomic.Bool
@@ -155,7 +156,8 @@ type Manager struct {
 	rtProvider RoundTripperProvider
 
 	// Auto refresh state
-	refreshCancel context.CancelFunc
+	refreshCancel  context.CancelFunc
+	refreshLimiter chan struct{}
 }
 
 // NewManager constructs a manager with optional custom selector and hook.
@@ -173,6 +175,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 		hook:            hook,
 		auths:           make(map[string]*Auth),
 		providerOffsets: make(map[string]int),
+		refreshLimiter:  make(chan struct{}, maxConcurrentRefresh),
 	}
 	// atomic.Value requires non-nil initial value.
 	manager.runtimeConfig.Store(&internalconfig.Config{})
@@ -1830,8 +1833,6 @@ func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 func (m *Manager) StartAutoRefresh(parent context.Context, interval time.Duration) {
 	if interval <= 0 || interval > refreshCheckInterval {
 		interval = refreshCheckInterval
-	} else {
-		interval = refreshCheckInterval
 	}
 	if m.refreshCancel != nil {
 		m.refreshCancel()
@@ -1880,7 +1881,14 @@ func (m *Manager) checkRefreshes(ctx context.Context) {
 			if !m.markRefreshPending(a.ID, now) {
 				continue
 			}
-			go m.refreshAuth(ctx, a.ID)
+			release, ok := m.acquireRefreshSlot(ctx)
+			if !ok {
+				continue
+			}
+			go func(authID string) {
+				defer release()
+				m.refreshAuth(ctx, authID)
+			}(a.ID)
 		}
 	}
 }
@@ -2113,6 +2121,21 @@ func (m *Manager) markRefreshPending(id string, now time.Time) bool {
 	auth.NextRefreshAfter = now.Add(refreshPendingBackoff)
 	m.auths[id] = auth
 	return true
+}
+
+func (m *Manager) acquireRefreshSlot(ctx context.Context) (func(), bool) {
+	if m == nil || m.refreshLimiter == nil {
+		return func() {}, true
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case m.refreshLimiter <- struct{}{}:
+		return func() { <-m.refreshLimiter }, true
+	case <-ctx.Done():
+		return nil, false
+	}
 }
 
 func (m *Manager) refreshAuth(ctx context.Context, id string) {
