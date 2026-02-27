@@ -88,8 +88,10 @@ jobs:
           set -euo pipefail
           branch="${BRANCH_NAME:-${GITHUB_REF_NAME:-main}}"
           git checkout "$branch"
-          git merge --no-edit "upstream/${branch}"
-          git push origin "$branch"
+          # Keep commit history linear by replaying local commits on top of upstream.
+          git rebase "upstream/${branch}"
+          # Rebase rewrites commit history, so update remote with a safe force push.
+          git push --force-with-lease origin "$branch"
 
       - name: Push release tag to origin
         if: steps.resolve_release.outputs.has_new_release == 'true'
