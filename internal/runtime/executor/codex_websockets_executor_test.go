@@ -9,9 +9,50 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	"github.com/tidwall/gjson"
 )
+
+func TestApplyCodexPromptCacheHeaders_OpenAIResponses_SynthesizesPromptCacheKeyFromClientIdentity(t *testing.T) {
+	ctx := contextWithGinHeadersAndAPIKey(nil, "test-api-key")
+	req := cliproxyexecutor.Request{
+		Model:   "gpt-5.3-codex",
+		Payload: []byte(`{"model":"gpt-5.3-codex"}`),
+	}
+	body, headers := applyCodexPromptCacheHeaders(ctx, nil, sdktranslator.FromString("openai-response"), req, []byte(`{"model":"gpt-5.3-codex"}`))
+	expectedKey := expectedCodexPromptCacheKey("test-api-key")
+
+	if got := gjson.GetBytes(body, "prompt_cache_key").String(); got != expectedKey {
+		t.Fatalf("prompt_cache_key = %q, want %q", got, expectedKey)
+	}
+	if got := headers.Get("Conversation_id"); got != expectedKey {
+		t.Fatalf("Conversation_id = %q, want %q", got, expectedKey)
+	}
+	if got := headers.Get("Session_id"); got != expectedKey {
+		t.Fatalf("Session_id = %q, want %q", got, expectedKey)
+	}
+}
+
+func TestApplyCodexPromptCacheHeaders_OpenAIResponses_PreservesProvidedPromptCacheKey(t *testing.T) {
+	ctx := contextWithGinHeadersAndAPIKey(nil, "test-api-key")
+	req := cliproxyexecutor.Request{
+		Model:   "gpt-5.3-codex",
+		Payload: []byte(`{"model":"gpt-5.3-codex","prompt_cache_key":"client-key"}`),
+	}
+	body, headers := applyCodexPromptCacheHeaders(ctx, nil, sdktranslator.FromString("openai-response"), req, []byte(`{"model":"gpt-5.3-codex"}`))
+
+	if got := gjson.GetBytes(body, "prompt_cache_key").String(); got != "client-key" {
+		t.Fatalf("prompt_cache_key = %q, want %q", got, "client-key")
+	}
+	if got := headers.Get("Conversation_id"); got != "client-key" {
+		t.Fatalf("Conversation_id = %q, want %q", got, "client-key")
+	}
+	if got := headers.Get("Session_id"); got != "client-key" {
+		t.Fatalf("Session_id = %q, want %q", got, "client-key")
+	}
+}
 
 func TestBuildCodexWebsocketRequestBodyPreservesPreviousResponseID(t *testing.T) {
 	body := []byte(`{"model":"gpt-5-codex","previous_response_id":"resp-1","input":[{"type":"message","id":"msg-1"}]}`)
@@ -266,6 +307,10 @@ func TestApplyCodexHeadersDoesNotInjectClientOnlyHeadersByDefault(t *testing.T) 
 }
 
 func contextWithGinHeaders(headers map[string]string) context.Context {
+	return contextWithGinHeadersAndAPIKey(headers, "")
+}
+
+func contextWithGinHeadersAndAPIKey(headers map[string]string, apiKey string) context.Context {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
@@ -273,6 +318,9 @@ func contextWithGinHeaders(headers map[string]string) context.Context {
 	ginCtx.Request.Header = make(http.Header, len(headers))
 	for key, value := range headers {
 		ginCtx.Request.Header.Set(key, value)
+	}
+	if apiKey != "" {
+		ginCtx.Set("apiKey", apiKey)
 	}
 	return context.WithValue(context.Background(), "gin", ginCtx)
 }
