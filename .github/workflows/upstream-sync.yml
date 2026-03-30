@@ -48,29 +48,22 @@ jobs:
 
           if [ -z "${release_tag}" ] || [ "${release_tag}" = "null" ]; then
             echo "No upstream release tag found."
-            echo "has_new_release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if git ls-remote --exit-code --tags origin "refs/tags/${release_tag}" >/dev/null 2>&1; then
-            echo "Release tag already exists in origin: ${release_tag}"
-            echo "has_new_release=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "Detected new upstream release tag: ${release_tag}"
+          echo "Detected latest upstream release tag: ${release_tag}"
           echo "upstream_release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
-          echo "has_new_release=true" >> "$GITHUB_OUTPUT"
 
       - name: Fetch upstream branch and release tag
-        if: steps.resolve_release.outputs.has_new_release == 'true'
+        if: steps.resolve_release.outputs.upstream_release_tag != ''
         run: |
           set -euo pipefail
+          git fetch origin --force --tags
           git fetch upstream --no-tags "${TARGET_BRANCH}:refs/remotes/upstream/${TARGET_BRANCH}"
           git fetch upstream "refs/tags/${{ steps.resolve_release.outputs.upstream_release_tag }}:refs/tags/${{ steps.resolve_release.outputs.upstream_release_tag }}"
 
       - name: Sync default branch
-        if: steps.resolve_release.outputs.has_new_release == 'true'
+        if: steps.resolve_release.outputs.upstream_release_tag != ''
         env:
           BRANCH_NAME: ${{ env.TARGET_BRANCH }}
           WORKFLOW_TRIGGER_TOKEN: ${{ secrets.WORKFLOW_TRIGGER_TOKEN }}
@@ -93,10 +86,59 @@ jobs:
           # Rebase rewrites commit history, so update remote with a safe force push.
           git push --force-with-lease origin "$branch"
 
-      - name: Push release tag to origin
-        if: steps.resolve_release.outputs.has_new_release == 'true'
+      - name: Derive fork patch tag
+        if: steps.resolve_release.outputs.upstream_release_tag != ''
+        id: derive_patch_tag
+        env:
+          BRANCH_NAME: ${{ env.TARGET_BRANCH }}
+          UPSTREAM_RELEASE_TAG: ${{ steps.resolve_release.outputs.upstream_release_tag }}
+        run: |
+          set -euo pipefail
+
+          branch="${BRANCH_NAME:-${GITHUB_REF_NAME:-main}}"
+          patch_base="${UPSTREAM_RELEASE_TAG}-patch"
+
+          git checkout "$branch"
+
+          if ! git merge-base --is-ancestor "upstream/${branch}" HEAD; then
+            echo "Current HEAD is not based on upstream/${branch}; refusing to tag."
+            exit 1
+          fi
+
+          local_commit_count="$(git rev-list --count "upstream/${branch}..HEAD")"
+          if [ "$local_commit_count" -eq 0 ]; then
+            echo "No fork-only commits after rebase; skipping patch tag creation."
+            echo "should_push=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          existing_head_tag="$(git tag --points-at HEAD -l "${patch_base}*")"
+          if [ -n "$existing_head_tag" ]; then
+            echo "HEAD already tagged with fork patch tag: ${existing_head_tag}"
+            echo "patch_tag=${existing_head_tag%%$'\n'*}" >> "$GITHUB_OUTPUT"
+            echo "should_push=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          next_tag="${patch_base}"
+          if git rev-parse -q --verify "refs/tags/${next_tag}" >/dev/null; then
+            next_number=2
+            while git rev-parse -q --verify "refs/tags/${patch_base}${next_number}" >/dev/null || \
+                  git rev-parse -q --verify "refs/tags/${patch_base}-${next_number}" >/dev/null; do
+              next_number=$((next_number + 1))
+            done
+            next_tag="${patch_base}${next_number}"
+          fi
+
+          echo "Selected fork patch tag: ${next_tag}"
+          echo "patch_tag=${next_tag}" >> "$GITHUB_OUTPUT"
+          echo "should_push=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push fork patch tag to origin
+        if: steps.derive_patch_tag.outputs.should_push == 'true'
         env:
           WORKFLOW_TRIGGER_TOKEN: ${{ secrets.WORKFLOW_TRIGGER_TOKEN }}
+          PATCH_TAG: ${{ steps.derive_patch_tag.outputs.patch_tag }}
         run: |
           set -euo pipefail
 
@@ -109,4 +151,5 @@ jobs:
           git config --local --unset-all http.https://github.com/.extraheader || true
           git remote set-url origin "https://x-access-token:${WORKFLOW_TRIGGER_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
-          git push origin "refs/tags/${{ steps.resolve_release.outputs.upstream_release_tag }}"
+          git tag "${PATCH_TAG}" HEAD
+          git push origin "refs/tags/${PATCH_TAG}"
