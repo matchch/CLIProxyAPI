@@ -2,9 +2,9 @@ name: goreleaser
 
 on:
   push:
-    # run only against tags
+    # run only against fork-owned patch tags
     tags:
-      - '*'
+      - 'v*-patch*'
 
 permissions:
   contents: write
