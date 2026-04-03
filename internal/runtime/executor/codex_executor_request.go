@@ -165,6 +165,8 @@ func (e *CodexExecutor) cacheHelperDoc(ctx context.Context, from sdktranslator.F
 		promptCacheKey := ojson.GetBytesNoCopy(req.Payload, "prompt_cache_key")
 		if promptCacheKey.Exists() {
 			cache.ID = strings.Clone(promptCacheKey.String())
+		} else if apiKey := strings.TrimSpace(helps.APIKeyFromContext(ctx)); apiKey != "" {
+			cache.ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("cli-proxy-api:codex:prompt-cache:"+apiKey)).String()
 		}
 	} else if sourceFormatEqual(from, sdktranslator.FormatOpenAI) {
 		if promptCacheKey := ojson.GetBytesNoCopy(req.Payload, "prompt_cache_key"); promptCacheKey.Exists() {
