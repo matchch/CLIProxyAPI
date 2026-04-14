@@ -1396,7 +1396,8 @@ func observeHomeCooldownRetryLimit(cooldown *homeDispatchRetryAfterError, retryL
 
 func isCredentialRetryRoundStatus(status int) bool {
 	switch status {
-	case http.StatusForbidden,
+	case 0,
+		http.StatusForbidden,
 		http.StatusRequestTimeout,
 		http.StatusTooManyRequests,
 		http.StatusInternalServerError,
