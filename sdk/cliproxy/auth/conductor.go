@@ -1947,11 +1947,14 @@ func (m *Manager) shouldRetryAfterError(err error, attempt int, providers []stri
 		}
 		return wait, true
 	}
-	if status != http.StatusTooManyRequests {
+	if status != 0 && status != http.StatusTooManyRequests {
 		return 0, false
 	}
 	if !m.retryAllowed(attempt, providers) {
 		return 0, false
+	}
+	if status == 0 {
+		return 0, true
 	}
 	retryAfter := retryAfterFromError(err)
 	if retryAfter == nil || *retryAfter <= 0 || *retryAfter > maxWait {
