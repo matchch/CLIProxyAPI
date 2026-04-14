@@ -258,21 +258,44 @@ func ParseOpenAIStreamUsage(line []byte) (usage.Detail, bool) {
 	return detail, true
 }
 
+func mergeClaudeUsageFields(detail *usage.Detail, node gjson.Result) {
+	if detail == nil || !node.Exists() {
+		return
+	}
+
+	if v := node.Get("input_tokens").Int(); v > detail.InputTokens {
+		detail.InputTokens = v
+	}
+	if v := node.Get("output_tokens").Int(); v > detail.OutputTokens {
+		detail.OutputTokens = v
+	}
+
+	cacheTokens := node.Get("cache_read_input_tokens").Int()
+	if fallback := node.Get("cache_creation_input_tokens").Int(); fallback > cacheTokens {
+		cacheTokens = fallback
+	}
+	if cacheTokens > detail.CachedTokens {
+		detail.CachedTokens = cacheTokens
+	}
+
+	if v := node.Get("reasoning_tokens").Int(); v > detail.ReasoningTokens {
+		detail.ReasoningTokens = v
+	}
+	if v := node.Get("total_tokens").Int(); v > detail.TotalTokens {
+		detail.TotalTokens = v
+	}
+}
+
 func ParseClaudeUsage(data []byte) usage.Detail {
 	usageNode := gjson.ParseBytes(data).Get("usage")
 	if !usageNode.Exists() {
 		return usage.Detail{}
 	}
-	detail := usage.Detail{
-		InputTokens:  usageNode.Get("input_tokens").Int(),
-		OutputTokens: usageNode.Get("output_tokens").Int(),
-		CachedTokens: usageNode.Get("cache_read_input_tokens").Int(),
+	var detail usage.Detail
+	mergeClaudeUsageFields(&detail, usageNode)
+	if detail.TotalTokens == 0 {
+		detail.TotalTokens = detail.InputTokens + detail.OutputTokens
 	}
-	if detail.CachedTokens == 0 {
-		// fall back to creation tokens when read tokens are absent
-		detail.CachedTokens = usageNode.Get("cache_creation_input_tokens").Int()
-	}
-	detail.TotalTokens = detail.InputTokens + detail.OutputTokens
 	return detail
 }
 
@@ -281,19 +304,22 @@ func ParseClaudeStreamUsage(line []byte) (usage.Detail, bool) {
 	if len(payload) == 0 || !gjson.ValidBytes(payload) {
 		return usage.Detail{}, false
 	}
-	usageNode := gjson.GetBytes(payload, "usage")
-	if !usageNode.Exists() {
+	var detail usage.Detail
+	var found bool
+	for _, path := range []string{"usage", "message.usage"} {
+		usageNode := gjson.GetBytes(payload, path)
+		if !usageNode.Exists() {
+			continue
+		}
+		mergeClaudeUsageFields(&detail, usageNode)
+		found = true
+	}
+	if !found {
 		return usage.Detail{}, false
 	}
-	detail := usage.Detail{
-		InputTokens:  usageNode.Get("input_tokens").Int(),
-		OutputTokens: usageNode.Get("output_tokens").Int(),
-		CachedTokens: usageNode.Get("cache_read_input_tokens").Int(),
+	if detail.TotalTokens == 0 {
+		detail.TotalTokens = detail.InputTokens + detail.OutputTokens
 	}
-	if detail.CachedTokens == 0 {
-		detail.CachedTokens = usageNode.Get("cache_creation_input_tokens").Int()
-	}
-	detail.TotalTokens = detail.InputTokens + detail.OutputTokens
 	return detail, true
 }
 

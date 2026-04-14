@@ -62,3 +62,42 @@ func TestUsageReporterBuildRecordIncludesLatency(t *testing.T) {
 		t.Fatalf("latency = %v, want <= 3s", record.Latency)
 	}
 }
+
+func TestParseClaudeStreamUsageSupportsNestedMessageUsage(t *testing.T) {
+	line := []byte(`data: {"type":"message_start","message":{"usage":{"input_tokens":321,"cache_creation_input_tokens":7}}}`)
+
+	detail, ok := ParseClaudeStreamUsage(line)
+	if !ok {
+		t.Fatalf("expected usage to be detected")
+	}
+	if detail.InputTokens != 321 {
+		t.Fatalf("input tokens = %d, want %d", detail.InputTokens, 321)
+	}
+	if detail.OutputTokens != 0 {
+		t.Fatalf("output tokens = %d, want 0", detail.OutputTokens)
+	}
+	if detail.CachedTokens != 7 {
+		t.Fatalf("cached tokens = %d, want %d", detail.CachedTokens, 7)
+	}
+	if detail.TotalTokens != 321 {
+		t.Fatalf("total tokens = %d, want %d", detail.TotalTokens, 321)
+	}
+}
+
+func TestParseClaudeStreamUsageMergesTopLevelAndNestedUsage(t *testing.T) {
+	line := []byte(`data: {"usage":{"output_tokens":9},"message":{"usage":{"input_tokens":4}}}`)
+
+	detail, ok := ParseClaudeStreamUsage(line)
+	if !ok {
+		t.Fatalf("expected usage to be detected")
+	}
+	if detail.InputTokens != 4 {
+		t.Fatalf("input tokens = %d, want %d", detail.InputTokens, 4)
+	}
+	if detail.OutputTokens != 9 {
+		t.Fatalf("output tokens = %d, want %d", detail.OutputTokens, 9)
+	}
+	if detail.TotalTokens != 13 {
+		t.Fatalf("total tokens = %d, want %d", detail.TotalTokens, 13)
+	}
+}

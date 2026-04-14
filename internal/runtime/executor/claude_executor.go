@@ -27,6 +27,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
+	cliproxyusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -454,6 +455,41 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		}
 		return nil, err
 	}
+
+	usageTotals := cliproxyusage.Detail{}
+	usageSeen := false
+	mergeUsageTotals := func(detail cliproxyusage.Detail) {
+		if detail.InputTokens > usageTotals.InputTokens {
+			usageTotals.InputTokens = detail.InputTokens
+		}
+		if detail.OutputTokens > usageTotals.OutputTokens {
+			usageTotals.OutputTokens = detail.OutputTokens
+		}
+		if detail.ReasoningTokens > usageTotals.ReasoningTokens {
+			usageTotals.ReasoningTokens = detail.ReasoningTokens
+		}
+		if detail.CachedTokens > usageTotals.CachedTokens {
+			usageTotals.CachedTokens = detail.CachedTokens
+		}
+		if detail.TotalTokens > usageTotals.TotalTokens {
+			usageTotals.TotalTokens = detail.TotalTokens
+		}
+		usageSeen = true
+	}
+	publishUsageTotals := func() {
+		if usageSeen {
+			if usageTotals.TotalTokens == 0 {
+				usageTotals.TotalTokens = usageTotals.InputTokens + usageTotals.OutputTokens + usageTotals.ReasoningTokens
+				if usageTotals.TotalTokens == 0 {
+					usageTotals.TotalTokens = usageTotals.InputTokens + usageTotals.OutputTokens + usageTotals.ReasoningTokens + usageTotals.CachedTokens
+				}
+			}
+			reporter.Publish(ctx, usageTotals)
+		} else {
+			reporter.EnsurePublished(ctx)
+		}
+	}
+
 	out := make(chan cliproxyexecutor.StreamChunk)
 	go func() {
 		defer close(out)
@@ -462,6 +498,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				log.Errorf("response body close error: %v", errClose)
 			}
 		}()
+		defer publishUsageTotals()
 
 		// If from == to (Claude → Claude), directly forward the SSE stream without translation
 		if from == to {
@@ -471,7 +508,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				line := scanner.Bytes()
 				helps.AppendAPIResponseChunk(ctx, e.cfg, line)
 				if detail, ok := helps.ParseClaudeStreamUsage(line); ok {
-					reporter.Publish(ctx, detail)
+					mergeUsageTotals(detail)
 				}
 				if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 					line = stripClaudeToolPrefixFromStreamLine(line, claudeToolPrefix)
@@ -501,7 +538,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			line := scanner.Bytes()
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
 			if detail, ok := helps.ParseClaudeStreamUsage(line); ok {
-				reporter.Publish(ctx, detail)
+				mergeUsageTotals(detail)
 			}
 			if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 				line = stripClaudeToolPrefixFromStreamLine(line, claudeToolPrefix)
