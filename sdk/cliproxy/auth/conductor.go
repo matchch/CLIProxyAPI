@@ -1926,23 +1926,20 @@ func (m *Manager) shouldRetryAfterError(err error, attempt int, providers []stri
 		}
 		return wait, true
 	}
-	if status == 0 {
+	if status == 0 || status == http.StatusTooManyRequests {
 		if !m.retryAllowed(attempt, providers) {
 			return 0, false
 		}
-		return 0, true
+		if status == 0 {
+			return 0, true
+		}
+		retryAfter := retryAfterFromError(err)
+		if retryAfter == nil || *retryAfter <= 0 || *retryAfter > maxWait {
+			return 0, false
+		}
+		return *retryAfter, true
 	}
-	if status != http.StatusTooManyRequests {
-		return 0, false
-	}
-	if !m.retryAllowed(attempt, providers) {
-		return 0, false
-	}
-	retryAfter := retryAfterFromError(err)
-	if retryAfter == nil || *retryAfter <= 0 || *retryAfter > maxWait {
-		return 0, false
-	}
-	return *retryAfter, true
+	return 0, false
 }
 
 func waitForCooldown(ctx context.Context, wait time.Duration) error {
