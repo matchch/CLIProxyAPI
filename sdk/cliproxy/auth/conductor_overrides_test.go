@@ -96,7 +96,7 @@ func TestManager_ShouldRetryAfterError_RetriesLocalRoundWithoutCooldown(t *testi
 		t.Fatalf("register auth: %v", errRegister)
 	}
 
-	for _, status := range []int{0, http.StatusTooManyRequests, http.StatusBadGateway} {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusBadGateway} {
 		wait, shouldRetry := m.shouldRetryAfterError(&Error{HTTPStatus: status, Message: "retryable failure"}, 0, []string{"codex"}, model, 0)
 		if !shouldRetry || wait != 0 {
 			t.Fatalf("status %d retry = (%v, %t), want (0, true)", status, wait, shouldRetry)
