@@ -48,26 +48,29 @@ jobs:
           EOF
 
           git fetch --force --tags
-          previous_tag=""
-          if previous_tag_value="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null)"; then
-            previous_tag="$previous_tag_value"
+          # Rebased fork tags need a published release baseline, not an ancestry tag.
+          published_tags="$(gh api "repos/${GH_REPO}/releases?per_page=100" --paginate \
+            --jq '.[] | select(.draft == false and .published_at != null) | .tag_name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+-patch[0-9]*$"))')"
+          previous_tag="$(printf '%s\n' "$published_tags" "$GITHUB_REF_NAME" | sort -Vu |
+            awk -v current="$GITHUB_REF_NAME" '$0 == current { print previous; exit } { previous = $0 }')"
+          generate_notes_args=(-f tag_name="$GITHUB_REF_NAME")
+          if [[ -n "$previous_tag" ]]; then
             changelog_range="${previous_tag}..${GITHUB_REF_NAME}"
+            generate_notes_args+=(-f previous_tag_name="$previous_tag")
+            full_changelog_url="https://github.com/${GH_REPO}/compare/${previous_tag}...${GITHUB_REF_NAME}"
           else
             changelog_range="$GITHUB_REF_NAME"
+            full_changelog_url="https://github.com/${GH_REPO}/commits/${GITHUB_REF_NAME}"
           fi
 
           git log --reverse --pretty=format:'- %s (%h)' "$changelog_range" |
             grep -Ev '^- (docs:|test:)' > "$changelog_entries_file" || true
 
           gh api "repos/${GH_REPO}/releases/generate-notes" \
-            -f tag_name="$GITHUB_REF_NAME" \
+            "${generate_notes_args[@]}" \
             --jq .body > "$generated_notes_file"
           if [[ ! -s "$generated_notes_file" ]]; then
-            if [[ -n "$previous_tag" ]]; then
-              printf '**Full Changelog**: https://github.com/%s/compare/%s...%s\n' "$GH_REPO" "$previous_tag" "$GITHUB_REF_NAME" > "$generated_notes_file"
-            else
-              printf '**Full Changelog**: https://github.com/%s/commits/%s\n' "$GH_REPO" "$GITHUB_REF_NAME" > "$generated_notes_file"
-            fi
+            printf '**Full Changelog**: %s\n' "$full_changelog_url" > "$generated_notes_file"
           fi
 
           {
@@ -84,6 +87,17 @@ jobs:
             printf '\n'
             cat "$changelog_notes_file"
           } > "$updated_notes_file"
+
+          # Byte counting conservatively bounds GitHub's 125000-character body limit.
+          if [[ $(wc -c < "$updated_notes_file") -gt 125000 ]]; then
+            {
+              cat "$release_notes_file"
+              printf '\n## Changelog\n\n'
+              printf 'This release contains %s commits in `%s`.\n\n' "$(git rev-list --count "$changelog_range")" "$changelog_range"
+              printf 'Detailed notes exceed the GitHub release body limit; see the full changelog instead.\n\n'
+              printf '**Full Changelog**: %s\n' "$full_changelog_url"
+            } > "$updated_notes_file"
+          fi
 
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release edit "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "$updated_notes_file"
@@ -659,6 +673,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          if [[ ! -d dist ]]; then
+            echo "No release artifacts downloaded; skipping checksums"
+            exit 0
+          fi
           cd dist
           shopt -s nullglob
           archives=(CLIProxyAPI_*.tar.gz CLIProxyAPI_*.zip)
